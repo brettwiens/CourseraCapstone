@@ -1,0 +1,992 @@
+---
+title: "Capstone"
+author: "Brett Wiens"
+date: "February 22, 2018"
+output: 
+  html_document:
+    fig_height: 8
+    fig_width: 10
+    self_contained: no
+    toc: yes
+    toc_float: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+require(readr); require(stringi); require(htmlTable); require(dplyr); require(ggplot2); require(tidytext); require(gridExtra); require(tm); require(readtext);require(tidytext); require(dplyr); require(stringr); require(tidyr); require(wordcloud); require(reshape2); require(igraph); require(ggraph); require(widyr); require(qdapDictionaries); require(hunspell); require(textclean); require(beepr)
+```
+## Natural Language Analysis of a Corpora of Text
+
+We have a large amount of text data provided from news, blogs, and twitter.  We would like to create a program that will utilize this body (corpus) of data to receive input from a user in the form of a short amount of text and from that predict for them the likely next words.  This kind of technology is frequently used on mobile devices and other predictive text.  In this markdown file we will explore the data, process and clean it so that we can predict with some confidence what the user would like to see.
+
+```{r Setting Options}
+## Define the sample amount
+SamplePercent = 1
+SamplePercent = SamplePercent/100
+blnStopWords = TRUE
+SmartStop_Words <- stop_words[stop_words$lexicon == "SMART",]
+## if blnStopWords = TRUE, stop Words are removed, if False, they will be included
+
+```
+
+
+## Data Acquisition
+
+Assuming that all the source data has already been downloaded, I'm going to start by setting the working directory and pointing to the data.  We will then read the data from the text files for analysis.
+
+```{r GettingData, message=FALSE, warning=FALSE}
+
+## Here are the locations for each of the source datasets, rather than hard-coding... ever.  I'm going to use these to connect whenever I need 'em.
+dataEnglishBlogs <- "./Data/final/en_US/en_US.blogs.txt"
+dataEnglishTwitter <- "./Data/final/en_US/en_US.twitter.txt"
+dataEnglishNews <- "./Data/final/en_US/en_US.news.txt"
+
+## Read each file line by line into R
+if(!exists("Twitter")){
+    Twitter <- readLines(con <- file(dataEnglishTwitter, "r"), skipNul = TRUE)
+    close(con)  ## Clean Up After Myself
+}
+if(!exists("Blogs")){
+    Blogs <- readLines(con <- file(dataEnglishBlogs, "r"), skipNul = TRUE)
+    close(con)  ## Clean Up After Myself
+}
+if(!exists("News")){   
+        News <- readLines(con <- file(dataEnglishNews, "r"), skipNul = TRUE)
+    close(con)  ## Clean Up After Myself
+
+for(i in 1:100){
+News <- c(News, "The Calgary Flames are a professional ice hockey team based in Calgary, Alberta. They are members of the Pacific Division of the Western Conference of the National Hockey League (NHL). The club is the third major-professional ice hockey team to represent the city of Calgary, following the Calgary Tigers (1921-1927) and Calgary Cowboys (1975-1977). The Flames are one of two NHL franchises in Alberta; the other is the Edmonton Oilers. The cities' proximity has led to a rivalry known as the Battle of Alberta.
+
+The team was founded in 1972 in Atlanta as the Atlanta Flames until relocating to Calgary in 1980. The Flames played their first three seasons in Calgary at the Stampede Corral before moving into their current home arena, the Scotiabank Saddledome (originally known as the Olympic Saddledome), in 1983. In 1985-86, the Flames became the first Calgary team since the 1923-24 Tigers to compete for the Stanley Cup. In 1988-89, the Flames won their first and only championship. The Flames' unexpected run to the 2004 Stanley Cup Finals gave rise to the Red Mile, and in 2011 the team hosted and won the second Heritage Classic outdoor game.
+
+The Flames have won two Presidents' Trophies as the league's top regular season team, and have claimed five division championships. Individually, Jarome Iginla is the franchise leader in games played, goals, and points, and is a two-time winner of the Maurice Richard Trophy as the league's leading goal scorer. Miikka Kiprusoff has the most wins by a goaltender in a Calgary Flames uniform. Nine people associated with the Flames have been inducted into the Hockey Hall of Fame.
+
+Off the ice, Calgary Sports and Entertainment, which owns the Flames, also own a Western Hockey League franchise (the Calgary Hitmen), a National Lacrosse League franchise (the Calgary Roughnecks) and a CFL franchise (the Calgary Stampeders). The team also lends their name to a bar and entertainment centre called Flames Central on Stephen Avenue in Downtown Calgary. Through the Flames Foundation, the team has donated more than CA$32 million to charity throughout southern Alberta since the franchise arrived.
+
+The C of Red chants go Flames go, and obviously the Edmonton Oilers suck, and the Vancouver Canucks suck.")}
+}
+
+beepr::beep(6)
+```
+
+## Exploring the Data
+Lets take a minute to put on our explorer's hats and learn about the data:
+
+## Clean the Data
+The first thing we notice are non-ascii characters, numbers, and non-words.  We can clean these pretty quickly with a few lines.
+
+```{r Cleaning Function}
+
+
+DataClean <- function (Samples){
+    Encoding(Samples$text) <- "latin1"
+    Samples$text <- iconv(Samples$text, "latin1", "ASCII", sub = "")    ## Remove Non-Ascii characters
+    Samples$text <- gsub("\\d", "", Samples$text)                       ## Remove numbers
+    Samples$text <- gsub(" ", "SPACEBARHERE", Samples$text)
+    Samples$text <- gsub("\\W", "", Samples$text)                       ## Remove Non-words
+    Samples$text <- gsub("SPACEBARHERE", " ", Samples$text)
+
+    Samples$line <- seq.int(1, nrow(Samples))
+  Unstop_Samples <- 
+    unnest_tokens(Samples, gram1, text) %>%
+    mutate(word = replace(gram1, gram1 %in% SmartStop_Words$word, " ")) %>%
+    group_by(line) %>%
+    summarise(text = paste(word, collapse=' ')) %>%
+    ungroup %>%
+    select(-line)
+  
+  beepr::beep(6)  
+  Samples <- Samples[,1:2]
+  if(blnStopWords == TRUE){return(Unstop_Samples)}
+  else (return(Samples))
+
+}
+
+```
+
+## Prepare a Profanities List
+We are going to want to remove profanity from the dataset, so that the most common swears don't appear as predictions.  Hardly ideal for a child to write an innocent string only to learn versatile and overused (especially on the internet) words.  Will apply this list during tokenization.
+
+```{r Profanities, message=FALSE, warning=FALSE}
+ProfanityList <- "H:/DataScience/Capstone/Data/Profanities/swearWords.txt"
+Profanities <- readLines(con <- file(ProfanityList, "r"), skipNul = TRUE)
+close(con)
+
+## Merge profanities and stop_words
+StopFilteredWords <- c(SmartStop_Words$word, Profanities)   ## Put this back in if you want to avoid Stop words
+FilteredWords <- c(Profanities)
+```
+
+## Tokenization
+Now that we have a clean dataset without numbers, stange (Non-ASCII) characters, we need to do some tokenization.  Breaking strings of text into individual words (unigrams), pairs (bigrams), or more (trigrams, quadgrams...) allows us to analyze the individual words and combinations.  As far as a prediction algorithm, tokenization is critical.  With a single word given, mining bigrams is the best way to predict the next word.  With a couple words, bigrams and trigrams form the bases for prediction.
+
+```{r Tokenization Functions}
+gram1_Tokenization <- function(Samples, WordFilter){
+## Tokenize the words into unigrams and filter them
+Gram1 <- unnest_tokens(Samples, gram1, text, token = "ngrams", n = 1)
+   # Gram1 <- Gram1[hunspell_check(toupper(Gram1$gram1)),]
+   filtered1Gram <- Gram1 %>%                
+    filter(!gram1 %in% WordFilter)          ## Remove stop words and profanities
+    # filter(gram1 %in% GradyAugmented)        ## Remove words that don't appear in the dictionary
+  filtered1GramCount <- filtered1Gram %>% count(gram1, sort = TRUE)     ## Count each unigram
+  filtered1GramReunite <- filtered1GramCount ## Not necessary, but a coding simplicity
+  filtered1GramReunite <- filtered1GramReunite[1:10,]
+  
+  rm(Gram1, filtered1Gram)
+  gc(reset = TRUE)
+
+  beepr::beep(6)  
+  return( filtered1GramReunite)
+
+}
+
+gram2_Tokenization <- function(Samples, WordFilter){
+## Tokenize the words into bigrams and filter them    
+Gram2 <- unnest_tokens(Samples, gram2, text, token = "ngrams", n = 2)
+  ## common2Grams <- Gram2 %>% count(gram2, sort = TRUE)
+  separated2Grams <- Gram2 %>% separate(gram2, c("word1", "word2"), sep = " ")
+  # separated2Grams <- separated2Grams[hunspell_check(toupper(separated2Grams$word1)),]     ## Check if the first word is a word
+  # separated2Grams <- separated2Grams[hunspell_check(toupper(separated2Grams$word2)),]     ## Check if the second word is a word
+  filtered2Grams <- separated2Grams %>%
+    filter(!word1 %in% WordFilter) %>%      ## Remove stop words and profanities
+    #filter(word1 %in% GradyAugmented) %>%     ## Remove words that don't appear in the dictionary
+    filter(!word2 %in% WordFilter)          ## Remove stop words and profanities
+    #filter(word2 %in% GradyAugmented)         ## Remove words that don't appear in the dictionary
+  #filtered2GramCount <- filtered2Grams %>% count(word1, word2, sort = TRUE)           ## Count each bigram
+  #filtered2GramReunite <- unite(filtered2GramCount, gram2, word1, word2, sep = " ")   ## Reunite the bigrams together
+
+  rm(Gram2, separated2Grams)  
+  gc(reset = TRUE)
+
+  beepr::beep(6)  
+  return(filtered2Grams)
+
+}  
+ 
+gram3_Tokenization <- function(Samples, WordFilter){ 
+## Tokenize the words into trigrams and filter them  
+Gram3 <- unnest_tokens(Samples, gram3, text, token = "ngrams", n = 3)
+  ## common3Grams <- Gram3 %>% count(gram3, sort = TRUE)
+  separated3Grams <- Gram3 %>% separate(gram3, c("word1", "word2", "word3"), sep = " ")
+  # separated3Grams <- separated3Grams[hunspell_check(toupper(separated3Grams$word1)),]     ## Check if the first word is a word
+  # separated3Grams <- separated3Grams[hunspell_check(toupper(separated3Grams$word2)),]     ## Check if the second word is a word
+  # separated3Grams <- separated3Grams[hunspell_check(toupper(separated3Grams$word3)),]     ## Check if the third word is a word  
+  filtered3Grams <- separated3Grams %>%
+    filter(!word1 %in% WordFilter) %>%      ## Remove stop words and profanities
+    #filter(word1 %in% GradyAugmented) %>%     ## Remove words that don't appear in the dictionary
+    filter(!word2 %in% WordFilter) %>%      ## Remove stop words and profanities
+    #filter(word2 %in% GradyAugmented) %>%     ## Remove words that don't appear in the dictionary
+    filter(!word3 %in% WordFilter)          ## Remove stop words and profanities
+    #filter(word3 %in% GradyAugmented)         ## Remove words that don't appear in the dictionary
+  #filtered3GramCount <- filtered3Grams %>% count(word1, word2, word3, sort = TRUE)            ## Count each trigram
+  #filtered3GramReunite <- unite(filtered3GramCount, gram3, word1, word2, word3, sep = " ")    ## Reunite the trigrams together
+
+  rm(Gram3, separated3Grams)  
+  gc(reset = TRUE)
+
+  beepr::beep(6)  
+  return(filtered3Grams)
+
+}
+
+gram4_Tokenization <- function(Samples, WordFilter){  
+  ## Tokenize the words into quadgrams and filter them  
+Gram4 <- unnest_tokens(Samples, gram4, text, token = "ngrams", n = 4)
+  ## common4Grams <- Gram4 %>% count(gram4, sort = TRUE)
+  separated4Grams <- Gram4 %>% separate(gram4, c("word1", "word2", "word3", "word4"), sep = " ")
+  # separated4Grams <- separated4Grams[hunspell_check(toupper(separated4Grams$word1)),]     ## Check if the first word is a word
+  # separated4Grams <- separated4Grams[hunspell_check(toupper(separated4Grams$word2)),]     ## Check if the second word is a word
+  # separated4Grams <- separated4Grams[hunspell_check(toupper(separated4Grams$word3)),]     ## Check if the third word is a word 
+  # separated4Grams <- separated4Grams[hunspell_check(toupper(separated4Grams$word4)),]     ## Check if the fourth word is a word 
+  filtered4Grams <- separated4Grams %>%
+    filter(!word1 %in% WordFilter) %>%      ## Remove stop words and profanities
+    #filter(word1 %in% GradyAugmented) %>%     ## Remove words that don't appear in the dictionary
+    filter(!word2 %in% WordFilter) %>%      ## Remove stop words and profanities
+    #filter(word2 %in% GradyAugmented) %>%     ## Remove words that don't appear in the dictionary
+    filter(!word3 %in% WordFilter) %>%      ## Remove stop words and profanities
+    #filter(word3 %in% GradyAugmented) %>%     ## Remove words that don't appear in the dictionary
+    filter(!word4 %in% WordFilter)          ## Remove stop words and profanities
+    #filter(word4 %in% GradyAugmented)         ## Remove words that don't appear in the dictionary  
+  
+  #filtered4GramCount <- filtered4Grams %>% count(word1, word2, word3, word4, sort = TRUE)            ## Count each quadgram
+  #filtered4GramReunite <- unite(filtered4GramCount, gram3, word1, word2, word3, word4, sep = " ")    ## Reunite the guadgrams together  
+
+  rm(Gram4, separated4Grams) 
+  gc(reset = TRUE)
+
+  beepr::beep(6)  
+  return(filtered4Grams)
+
+}
+
+gram5_Tokenization <- function(Samples, WordFilter){
+    ## Tokenize the words into pentagrams and filter them  
+Gram5 <- unnest_tokens(Samples, gram5, text, token = "ngrams", n = 5)
+  ## common5Grams <- Gram5 %>% count(gram5, sort = TRUE)
+  separated5Grams <- Gram5 %>% separate(gram5, c("word1", "word2", "word3", "word4", "word5"), sep = " ")
+  # separated5Grams <- separated5Grams[hunspell_check(toupper(separated5Grams$word1)),]     ## Check if the first word is a word
+  # separated5Grams <- separated5Grams[hunspell_check(toupper(separated5Grams$word2)),]     ## Check if the second word is a word
+  # separated5Grams <- separated5Grams[hunspell_check(toupper(separated5Grams$word3)),]     ## Check if the third word is a word 
+  # separated5Grams <- separated5Grams[hunspell_check(toupper(separated5Grams$word4)),]     ## Check if the fourth word is a word 
+  # separated5Grams <- separated5Grams[hunspell_check(toupper(separated5Grams$word5)),]     ## Check if the fifth word is a word   
+  filtered5Grams <- separated5Grams %>%
+    filter(!word1 %in% WordFilter) %>%      ## Remove stop words and profanities
+    #filter(word1 %in% GradyAugmented) %>%     ## Remove words that don't appear in the dictionary
+    filter(!word2 %in% WordFilter) %>%      ## Remove stop words and profanities
+    #filter(word2 %in% GradyAugmented) %>%     ## Remove words that don't appear in the dictionary
+    filter(!word3 %in% WordFilter) %>%      ## Remove stop words and profanities
+    #filter(word3 %in% GradyAugmented) %>%     ## Remove words that don't appear in the dictionary
+    filter(!word4 %in% WordFilter) %>%      ## Remove stop words and profanities
+    #filter(word4 %in% GradyAugmented) %>%     ## Remove words that don't appear in the dictionary  
+    filter(!word5 %in% WordFilter)          ## Remove stop words and profanities
+    #filter(word5 %in% GradyAugmented)         ## Remove words that don't appear in the dictionary  
+  
+  #filtered5GramCount <- filtered5Grams %>% count(word1, word2, word3, word4, word5, sort = TRUE)            ## Count each pentagram
+  #filtered5GramReunite <- unite(filtered5GramCount, gram5, word1, word2, word3, word4, word5, sep = " ")    ## Reunite the pentagrams together  
+  rm(Gram5, separated5Grams)
+  gc(reset = TRUE)
+  
+  beepr::beep(6)
+  return(filtered5Grams) 
+}   
+  
+  # ## Cleaning up the names a bit, filterednGramReunite is a little bulky
+  # filtered1Gram <- filtered1GramReunite
+  # filtered2Gram <- filtered2GramReunite
+  # filtered3Gram <- filtered3GramReunite
+  # filtered4Gram <- filtered4GramReunite
+  # filtered5Gram <- filtered5GramReunite
+
+  #rm(filtered1GramReunite, filtered2GramReunite, filtered3GramReunite, filtered4GramReunite, filtered5GramReunite)
+  gc(reset = TRUE)
+  
+  # filtered1Gram$Rank <- seq.int(nrow(filtered1Gram))
+  # filtered2Gram$Rank <- seq.int(nrow(filtered2Gram))
+  # filtered3Gram$Rank <- seq.int(nrow(filtered3Gram))
+  # filtered4Gram$Rank <- seq.int(nrow(filtered4Gram))
+  # filtered5Gram$Rank <- seq.int(nrow(filtered5Gram))
+
+```
+
+## Correlations
+Calculate the correlations between non-adjacent, single, double, triple, quadruple, and quintuple word combinations.  Will use the first four words as predictor correlation for the fifth, three for the fourth, etc.
+
+```{r Correlation Functions}
+## Indirectly Correlated Words - Words that appear frequently in the same source, but not necessarily side-by-side
+## We may not necessarily want to predict the word that comes next, or, but rather something that is often posted in a similar     circumstance.
+
+NA_Correlation <- function(Samples){
+
+    ## This adds the line number to each sample (identifies to which post it belongs)
+    Samples$line <- seq.int(nrow(Samples))
+    
+    ## This breaks the tokens out once again, but this time it keeps track of which instance or post the text came from.
+    Sample_NonAdjacent_Word_Pairs <- Samples %>%
+        filter(line > 0) %>%
+        unnest_tokens(word, text) %>%
+        filter(!word %in% FilteredWords)
+    Sample_NonAdjacent_Word_Pairs <- Sample_NonAdjacent_Word_Pairs[hunspell_check(Sample_NonAdjacent_Word_Pairs$word),]     ## Check if the first word is a word
+    
+    
+    # ## For each word, this calculates the number of time any other word shows up in that text
+    # Sample_Word_Pairs <- Sample_Line_Words %>%
+    #     pairwise_count(word, line, sort = TRUE)
+    
+    ## Calculates the Correlation between word pairs
+    Sample_NonAdjacent_Word_Pair_Correlation <- Sample_NonAdjacent_Word_Pairs %>%
+        group_by(word) %>%
+        #filter(n() >= max(2,SamplePercent*1000)) %>%
+        pairwise_cor(word, line, sort = TRUE)
+     Sample_NonAdjacent_Word_Pair_Correlation <-
+         Sample_NonAdjacent_Word_Pair_Correlation[(Sample_NonAdjacent_Word_Pair_Correlation$correlation > 0),]
+ 
+     beepr::beep(6)
+     return(Sample_NonAdjacent_Word_Pair_Correlation)
+     
+}     
+
+Gram5_Correlation <- function(filtered5Grams){     
+## 5Gram Correlation - Words that appear frequently when preceded by a specific 4-word combination
+    Sample_5Gram_Reunite <- unite(filtered5Grams, firstPart, word1, word2, word3, word4, sep = " ")  ## Reunite the pentagrams together
+    Sample_5Gram_Reunite$firstPart <- gsub(" ", "SP8CE", Sample_5Gram_Reunite$firstPart)             ## Concatenating four words with a filler
+    Sample_5Gram_Reunite <- unite(Sample_5Gram_Reunite, words, firstPart, word5, sep = " ")
+    
+    Sample_5Gram_Reunite$line <- seq.int(nrow(Sample_5Gram_Reunite))
+    # Sample_5Gram_Pairs <- Sample_5Gram_Reunite %>%
+    #     filter(line > 0) %>%
+    #     unnest_tokens(word, words)
+    
+    Sample_5Gram_Count <- Sample_5Gram_Reunite %>%
+        count(words, sort = TRUE) %>%
+        separate(words, into = c("predictor","predicted"), sep = " ")
+        Sample_5Gram_Count$predictor <- gsub("SP8CE", " ", Sample_5Gram_Count$predictor)
+        
+    beepr::beep(6)
+    return(Sample_5Gram_Count)
+        
+    # Sample_5Gram_Correlation <- Sample_5Gram_Pairs %>%
+    #     group_by(word) %>%
+    #     #filter(n() >= max(2,SamplePercent*100)) %>%
+    #     pairwise_cor(word, line, sort = TRUE)
+    # 
+    #     Sample_5Gram_Correlation <- Sample_5Gram_Correlation[(Sample_5Gram_Correlation$correlation > 0),]    
+    #     Sample_5Gram_Correlation$item1 <- gsub("sp8ce", " ", Sample_5Gram_Correlation$item1)
+    #     Sample_5Gram_Correlation <- Sample_5Gram_Correlation[!grepl("sp8ce",Sample_5Gram_Correlation$item2),]
+    # 
+    # return(Sample_5Gram_Correlation)
+}
+
+Gram4_Correlation <- function(filtered4Grams){         
+## 4Gram Correlation - Words that appear frequently when preceded by a specific 3-word combination
+    Sample_4Gram_Reunite <- unite(filtered4Grams, firstPart, word1, word2, word3, sep = " ")    ## Reunite the trigrams together
+    Sample_4Gram_Reunite$firstPart <- gsub(" ", "SP8CE", Sample_4Gram_Reunite$firstPart)        ## Concatenating three words with a filler
+    Sample_4Gram_Reunite <- unite(Sample_4Gram_Reunite, words, firstPart, word4, sep = " ")
+    
+    Sample_4Gram_Reunite$line <- seq.int(nrow(Sample_4Gram_Reunite))
+    # Sample_4Gram_Pairs <- Sample_4Gram_Reunite %>%
+    #     filter(line > 0) %>%
+    #     unnest_tokens(word, words)
+    
+    Sample_4Gram_Count <- Sample_4Gram_Reunite %>%
+        count(words, sort = TRUE) %>%
+        separate(words, into = c("predictor","predicted"), sep = " ")
+        Sample_4Gram_Count$predictor <- gsub("SP8CE", " ", Sample_4Gram_Count$predictor)
+    
+        beepr::beep(6)
+        return(Sample_4Gram_Count)
+    
+    # Sample_4Gram_Correlation <- Sample_4Gram_Pairs %>%
+    #     group_by(word) %>%
+    #     #filter(n() >= max(2,SamplePercent*200)) %>%
+    #     pairwise_cor(word, line, sort = TRUE)
+    # 
+    # Sample_4Gram_Correlation <- Sample_4Gram_Correlation[(Sample_4Gram_Correlation$correlation > 0),]    
+    # Sample_4Gram_Correlation$item1 <- gsub("sp8ce", " ", Sample_4Gram_Correlation$item1)
+    # Sample_4Gram_Correlation <- Sample_4Gram_Correlation[!grepl("sp8ce",Sample_4Gram_Correlation$item2),]    
+    # 
+    # return(Sample_4Gram_Correlation)
+    
+}
+    
+Gram3_Correlation <- function(filtered3Grams){     
+## 3Gram Correlation - Words that appear frequently when preceded by a specific 2-word combination
+    Sample_3Gram_Reunite <- unite(filtered3Grams, firstPart, word1, word2, sep = " ")    ## Reunite the trigrams together
+    Sample_3Gram_Reunite$firstPart <- sub(" ", "SP8CE", Sample_3Gram_Reunite$firstPart)  ## Concatenating two words with a filler
+    Sample_3Gram_Reunite <- unite(Sample_3Gram_Reunite, words, firstPart, word3, sep = " ")
+    
+    Sample_3Gram_Reunite$line <- seq.int(nrow(Sample_3Gram_Reunite))
+    # Sample_3Gram_Pairs <- Sample_3Gram_Reunite %>%
+    #     filter(line > 0) %>%
+    #     unnest_tokens(word, words)
+    
+    Sample_3Gram_Count <- Sample_3Gram_Reunite %>%
+        count(words, sort = TRUE) %>%
+        separate(words, into = c("predictor","predicted"), sep = " ")
+        Sample_3Gram_Count$predictor <- gsub("SP8CE", " ", Sample_3Gram_Count$predictor)
+    
+        beepr::beep(6)
+        return(Sample_3Gram_Count)    
+    
+    # Sample_3Gram_Correlation <- Sample_3Gram_Pairs %>%
+    #     group_by(word) %>%
+    #     #filter(n() >= max(2,SamplePercent*400)) %>%
+    #     pairwise_cor(word, line, sort = TRUE)
+    # 
+    # Sample_3Gram_Correlation <- Sample_3Gram_Correlation[(Sample_3Gram_Correlation$correlation > 0),]    
+    # Sample_3Gram_Correlation$item1 <- sub("sp8ce", " ", Sample_3Gram_Correlation$item1)
+    # Sample_3Gram_Correlation <- Sample_3Gram_Correlation[!grepl("sp8ce",Sample_3Gram_Correlation$item2),]
+    # 
+    # return(Sample_3Gram_Correlation)    
+    
+}
+
+Gram2_Correlation <- function(filtered2Grams){         
+## 2Gram Correlation - Identifies the most likely word given one prior word
+    Sample_2Gram_Reunite <- filtered2Grams
+    Sample_2Gram_Reunite$line <- seq.int(nrow(Sample_2Gram_Reunite))
+    Sample_2Gram_Reunite <- unite(Sample_2Gram_Reunite, words, word1, word2, sep = " ")
+    
+    # Sample_2Gram_Pairs <- Sample_2Gram_Reunite %>%
+    #     filter(line > 0) %>%
+    #     unnest_tokens(word, words)
+    
+    Sample_2Gram_Count <- Sample_2Gram_Reunite %>%
+        count(words, sort = TRUE) %>%
+        separate(words, into = c("predictor","predicted"), sep = " ")
+        
+    beepr::beep(6)
+    return(Sample_2Gram_Count)
+    
+    # Sample_2Gram_Correlation <- Sample_2Gram_Pairs %>%
+    #     group_by(word) %>%
+    #     #filter(n() >= max(2,SamplePercent*400)) %>%
+    #     pairwise_cor(word, line, sort = TRUE)
+    # Sample_2Gram_Correlation <- Sample_2Gram_Correlation[(Sample_2Gram_Correlation$correlation > 0),]
+    # 
+    # return(Sample_2Gram_Correlation)
+       
+}
+    
+## CLeanup
+#     rm(Sample_2Gram_Pairs, Sample_2Gram_Reunite, Sample_2Gram_Words, Sample_5Gram_Pairs, Sample_5Gram_Reunite)
+#     rm(Sample_3Gram_Pairs, Sample_3Gram_Reunite, Sample_4Gram_Pairs, Sample_4Gram_Reunite)
+#     gc(reset = TRUE)
+#     
+# ## Major Cleanup    
+# rm(con, dfSampleTwitter, dfSampleNews, dfSampleBlog, filtered2Gram,filtered2Grams, filtered3Gram, filtered3Grams, Sample_NonAdjacent_Word_Pairs, Gram2, Gram3, Gram4, Gram5, dfBlogs, dfNews, dfTwitter, Samples, Gram1, SampleBlog, SampleNews, SampleTwitter, filtered4Grams, filtered5Grams, filtered4Gram, filtered5Gram)
+# gc(reset = TRUE)
+# 
+# ## Renaming Predictor Files
+#     Single_Words <- filtered1Gram      ## We really don't need to allocate much memory to this, the answer will ALWAYS be the same.
+#     Two_Words <- Sample_2Gram_Correlation
+#     Three_Words <- Sample_3Gram_Correlation
+#     Four_Words <- Sample_4Gram_Correlation
+#     Five_Words <- Sample_5Gram_Correlation
+#     Non_Adjacent_Pairs <- Sample_NonAdjacent_Word_Pair_Correlation
+#     
+# rm(filtered1Gram, Sample_2Gram_Correlation, Sample_3Gram_Correlation, Sample_NonAdjacent_Word_Pair_Correlation, Sample_4Gram_Correlation, Sample_5Gram_Correlation)  
+# gc(reset = TRUE)
+# 
+# Non_Adjacent_Pairs <- Non_Adjacent_Pairs[Non_Adjacent_Pairs$correlation > 0.01,]
+# 
+# saveRDS(Single_Words, "single_words.rds")
+# saveRDS(Two_Words, "two_words.rds")
+# saveRDS(Three_Words, "three_words.rds")
+# saveRDS(Four_Words, "four_words.rds")
+# saveRDS(Five_Words, "five_words.rds")
+# saveRDS(Non_Adjacent_Pairs, "non_adjacent_words.rds")
+
+```
+
+
+```{r Exploration, eval=FALSE, include=FALSE}
+
+## Word Counts
+twitWord <- sum(stri_count_words(Twitter))
+blogWord <- sum(stri_count_words(Blogs))
+newsWord <- sum(stri_count_words(News))
+
+## File Size
+twitSize <- paste(round(file.info(dataEnglishTwitter)$size / 1024 / 1024,digits = 2), "MB", sep = " ")
+blogSize <- paste(round(file.info(dataEnglishBlogs)$size / 1024 / 1024, digits = 2), "MB", sep = " ")
+newsSize <- paste(round(file.info(dataEnglishNews)$size / 1024 / 1024, digits = 2), "MB", sep = " ")
+
+## Line Counts
+twitLines <- length(Twitter)  ## How many lines in Twitter file (they were read in line by line, so this is pretty easy)
+blogLines <- length(Blogs)    ## How many lines in Blogs file (they were read in line by line, so this is pretty easy)
+newsLines <- length(News)     ## How many lines in News file (they were read in line by line, so this is pretty easy)
+
+## Maximum words per Line
+twitWPL <- max(sapply(gregexpr("\\W+", Twitter), length) + 1)   ## \\W+ searches for non-word character \\w+ searches for word character
+blogWPL <- max(sapply(gregexpr("\\W+", Blogs), length) + 1)     ## \\W+ searches for non-word character \\w+ searches for word character
+newsWPL <- max(sapply(gregexpr("\\W+", News), length) + 1)      ## \\W+ searches for non-word character \\w+ searches for word character
+
+## Average Words/Line
+twitMean <- mean(twitWord)
+blogMean <- mean(blogWord)
+newsMean <- mean(newsWord)
+
+exploratoryData <- data.frame(c("Twitter", "Blogs", "News"), c(twitWord, blogWord, newsWord), c(twitSize, blogSize, newsSize), 
+                             c(twitLines, blogLines, newsLines), c(twitWPL, blogWPL, newsWPL), c(twitMean, blogMean,newsMean ))
+names(exploratoryData) <- c("Source", "Total Words", "Size", "Total", "Maximum Words </br> per Line", "Average Words </br> per Line")
+
+exploratoryData[,-1] %>% htmlTable(header = names(exploratoryData[,-1]), 
+                              align = "rr|rrr", 
+                              n.cgroup = c(2,3), 
+                              cgroup = c("File", "Lines"),
+                              rnames = exploratoryData$Source,
+                              col.columns = c(rep("#F3E1D8",1), rep("#FFFFE0",1)))
+
+rm(twitWord, blogWord, newsWord, twitSize, blogSize, newsSize, twitLines, blogLines, newsLines, twitWPL, blogWPL, newsWPL, twitMean, blogMean,newsMean, exploratoryData )
+gc(reset = TRUE)
+```
+
+## Combine and Sample the Data
+Because we have a lot of data here, I chose to sample the data at a percent desired.  A smaller sample will make it faster, but will reduce the total accuracy.
+
+```{r Combine and Sample Data}
+
+Tranches <- 1/SamplePercent  ## This defines how many tranches to cut the data into (auto-calculates when sample is set)
+
+dfBlogs <- data_frame(source = "Blog", text = Blogs)
+dfNews <- data_frame(source = "News", text = News)
+dfTwitter <- data_frame(source = "Twitter", text = Twitter)
+
+## Take some samples
+# SampleBlog <- sample(dfBlogs$text, length(dfBlogs$text) * SamplePercent)
+# SampleNews <- sample(dfNews$text, length(dfNews$text) * SamplePercent)
+# SampleTwitter <- sample(dfTwitter$text, length(dfTwitter$text) * SamplePercent)
+
+dfBlogs$Tranche <- sample(0:Tranches, nrow(dfBlogs), replace = T)
+dfNews$Tranche <- sample(0:Tranches, nrow(dfNews), replace = T)
+dfTwitter$Tranche <- sample(0:Tranches, nrow(dfTwitter), replace = T)
+
+maximumTranche = Tranches   ## Tranches for 100% coverage
+
+progressBar <- winProgressBar(title = "Progress Bar", min = 1, max = maximumTranche, width = 300)
+    setWinProgressBar(progressBar,0, title = paste(round(0/maximumTranche, 2), "% done"))
+
+        NA_Predictors <- data.frame()
+    Single_Predictors <- data.frame()
+    Double_Predictors <- data.frame()
+    Triple_Predictors <- data.frame()
+     Quad_Predictors <- data.frame()
+    Quint_Predictors <- data.frame()
+    
+for(i in 1:maximumTranche)
+{
+    
+    dfSampleBlog <- dfBlogs[dfBlogs$Tranche == i,]
+    dfSampleBlog <- dfSampleBlog[,1:2]
+    dfSampleNews <- dfNews[dfNews$Tranche == i,]
+    dfSampleNews <- dfSampleNews[,1:2]
+    dfSampleTwitter <- dfTwitter[dfTwitter$Tranche == i,]
+    dfSampleTwitter <- dfSampleTwitter[,1:2]
+    
+    Samples <- rbind(dfSampleBlog, dfSampleNews, dfSampleTwitter)
+    
+        rm(dfSampleBlog, dfSampleNews, dfSampleTwitter)
+        gc(reset = TRUE)
+    
+    Samples <- DataClean(Samples)
+    
+    ## Predictions with stop words allowed
+    Single_Tokens <- gram1_Tokenization(Samples, FilteredWords)
+    Double_Tokens <- gram2_Tokenization(Samples, FilteredWords)
+    Triple_Tokens <- gram3_Tokenization(Samples, FilteredWords)
+    Quad_Tokens <- gram4_Tokenization(Samples,   FilteredWords)
+    Quint_Tokens <- gram5_Tokenization(Samples,  FilteredWords)
+    
+    ## Predictions with stop words disallowed
+    Stop_Single_Tokens <- gram1_Tokenization(Samples, StopFilteredWords)
+    Stop_Double_Tokens <- gram2_Tokenization(Samples, StopFilteredWords)
+    Stop_Triple_Tokens <- gram3_Tokenization(Samples, StopFilteredWords)
+    Stop_Quad_Tokens <- gram4_Tokenization(Samples,   StopFilteredWords)
+    Stop_Quint_Tokens <- gram5_Tokenization(Samples,  StopFilteredWords)
+    
+    # Non_Adjacent_Correlation <- NA_Correlation(Samples)
+    Single_Correlation <- Single_Tokens
+    Double_Correlation <- Gram2_Correlation(Double_Tokens)
+    Triple_Correlation <- Gram3_Correlation(Triple_Tokens)
+    Quad_Correlation <- Gram4_Correlation(Quad_Tokens)
+    Quint_Correlation <- Gram5_Correlation(Quint_Tokens)
+
+        rm(Single_Tokens, Double_Tokens, Triple_Tokens, Quad_Tokens, Quint_Tokens)
+        gc(reset = TRUE)
+        
+    # NA_Predictors     <- Non_Adjacent_Correlation
+    Single_Predictors <- Single_Correlation
+    Double_Predictors <- rbind(Double_Predictors, Double_Correlation)
+    Triple_Predictors <- rbind(Triple_Predictors, Triple_Correlation)
+    Quad_Predictors   <- rbind(Quad_Predictors, Quad_Correlation)
+    Quint_Predictors  <- rbind(Quint_Predictors, Quint_Correlation)
+    
+    setWinProgressBar(progressBar,i, title = paste(round(i/maximumTranche*100, 2), "% done"))
+
+        rm(Single_Correlation, Double_Correlation, Triple_Correlation, Quad_Correlation, Quint_Correlation)
+        gc(reset = TRUE)
+
+        beepr::beep(6)
+            
+}
+
+Double_Predictors <- Double_Predictors %>%
+    group_by(predictor, predicted) %>%
+    summarise(n = sum(n))
+Triple_Predictors <- Triple_Predictors %>%
+    group_by(predictor, predicted) %>%
+    summarise(n = sum(n))
+Quad_Predictors <- Quad_Predictors %>%
+    group_by(predictor, predicted) %>%
+    summarise(n = sum(n))
+Quint_Predictors <- Quint_Predictors %>%
+    group_by(predictor, predicted) %>%
+    summarise(n = sum(n))
+    
+    
+saveRDS(Single_Predictors, paste(blnStopWords, "single_words.rds"))
+saveRDS(Double_Predictors, paste(blnStopWords, "two_words.rds"))
+saveRDS(Triple_Predictors, paste(blnStopWords, "three_words.rds"))
+saveRDS(Quad_Predictors,   paste(blnStopWords, "four_words.rds"))
+saveRDS(Quint_Predictors,  paste(blnStopWords, "five_words.rds"))
+#saveRDS(NA_Predictors, paste(i, "non_adjacent_words.rds", sep = ""))   
+
+close(progressBar)
+
+alarm()
+```
+
+```{r Ordering}
+if(blnStopWords == FALSE){
+FALSE_Single_Words <- readRDS("single_words.rds")
+FALSE_Two_Words <- readRDS("FALSE two_words.rds")
+FALSE_Three_Words <- readRDS("FALSE three_words.rds")
+FALSE_Four_Words <- readRDS("FALSE four_words.rds")
+FALSE_Five_Words <- readRDS("FALSE five_words.rds")
+}
+
+if(blnStopWords == TRUE){
+TRUE_Single_Words <- readRDS("single_words.rds")
+TRUE_Two_Words <- readRDS("TRUE two_words.rds")
+TRUE_Three_Words <- readRDS("TRUE three_words.rds")
+TRUE_Four_Words <- readRDS("TRUE four_words.rds")
+TRUE_Five_Words <- readRDS("TRUE five_words.rds")
+}
+
+if(blnStopWords == FALSE){
+FALSE_Two_Words <- FALSE_Two_Words %>%
+    group_by(predictor, predicted) %>%
+    summarise(n = sum(n))
+
+FALSE_Three_Words <- FALSE_Three_Words %>%
+    group_by(predictor, predicted) %>%
+    summarise(n = sum(n))
+
+FALSE_Four_Words <- FALSE_Four_Words %>%
+    group_by(predictor, predicted) %>%
+    summarise(n = sum(n))
+
+FALSE_Five_Words <- FALSE_Five_Words %>%
+    group_by(predictor, predicted) %>%
+    summarise(n = sum(n))
+}
+
+if(blnStopWords == TRUE){
+## Ditch the Stop Words
+TRUE_Two_Words <- TRUE_Two_Words %>%
+    group_by(predictor, predicted) %>%
+    summarise(n = sum(n))
+
+TRUE_Three_Words <- TRUE_Three_Words %>%
+    group_by(predictor, predicted) %>%
+    summarise(n = sum(n))
+
+TRUE_Four_Words <- TRUE_Four_Words %>%
+    group_by(predictor, predicted) %>%
+    summarise(n = sum(n))
+
+TRUE_Five_Words <- TRUE_Five_Words %>%
+    group_by(predictor, predicted) %>%
+    summarise(n = sum(n))
+}
+
+if(blnStopWords == FALSE){
+FALSE_Two_Words <- FALSE_Two_Words[order(-FALSE_Two_Words$n),]
+FALSE_Three_Words <- FALSE_Three_Words[order(-FALSE_Three_Words$n),]
+FALSE_Four_Words <- FALSE_Four_Words[order(-FALSE_Four_Words$n),]
+FALSE_Five_Words <- FALSE_Five_Words[order(-FALSE_Five_Words$n),]
+}
+
+if(blnStopWords == TRUE){
+TRUE_Two_Words <- TRUE_Two_Words[order(-TRUE_Two_Words$n),]
+TRUE_Three_Words <- TRUE_Three_Words[order(-TRUE_Three_Words$n),]
+TRUE_Four_Words <- TRUE_Four_Words[order(-TRUE_Four_Words$n),]
+TRUE_Five_Words <- TRUE_Five_Words[order(-TRUE_Five_Words$n),]
+}
+
+if(blnStopWords == FALSE){
+saveRDS(FALSE_Two_Words, paste(blnStopWords,"two_words.rds"))
+saveRDS(FALSE_Three_Words, paste(blnStopWords,"three_words.rds"))
+saveRDS(FALSE_Four_Words, paste(blnStopWords,"four_words.rds"))
+saveRDS(FALSE_Five_Words, paste(blnStopWords,"five_words.rds"))
+}
+
+if(blnStopWords == TRUE){
+saveRDS(TRUE_Two_Words, paste(blnStopWords,"two_words.rds"))
+saveRDS(TRUE_Three_Words, paste(blnStopWords,"three_words.rds"))
+saveRDS(TRUE_Four_Words, paste(blnStopWords,"four_words.rds"))
+saveRDS(TRUE_Five_Words, paste(blnStopWords,"five_words.rds"))
+}
+
+beepr::beep(4)
+```
+
+################################################################################
+## PROCESSING STARTS HERE, ALL ABOVE IS DATA CLEANING AND PREPROCESSING       ##
+################################################################################
+
+## Prediction Stage
+
+```{r Load rds save tons of memory, eval=FALSE, include=FALSE}
+## blnStopWords needs to be defined, if it hasn't, assume Stop Words should be included.
+if(!exists("blnStopWords")){blnStopWords <- FALSE}
+
+Single_Words <- readRDS("single_words.rds")
+Single_Words$predictor <- Single_Words$gram1
+Single_Words$predicted <- Single_Words$gram1
+Single_Words <- Single_Words[,c(3,4,2)]
+
+if(blnStopWords == FALSE){
+  Two_Words <- readRDS("FALSE two_words.rds")
+  Three_Words <- readRDS("FALSE three_words.rds")
+  Four_Words <- readRDS("FALSE four_words.rds")
+  Five_Words <- readRDS("FALSE five_words.rds")
+#Non_Adjacent_Words <- readRDS("non_adjacent_words.rds")
+}
+
+if(blnStopWords == TRUE){
+  Two_Words <- readRDS("TRUE two_words.rds")
+  Three_Words <- readRDS("TRUE three_words.rds")
+  Four_Words <- readRDS("TRUE four_words.rds")
+  Five_Words <- readRDS("TRUE five_words.rds")
+}
+
+beepr::beep(4)
+```
+
+```{r Testing, eval=FALSE, include=FALSE}
+
+PredictionSize <- 200
+
+testString <- "I like how the same people are in almost all of Adam Sandler's"
+testString <- trimws(tolower(gsub("[[:punct:]]+", " ",gsub("'", "", testString))), which = "both")
+if(blnStopWords == TRUE){
+  testString <- as.data.frame(testString)
+  colnames(testString) <- "String"
+  testString$String <- as.character(testString$String)
+  testWord <- 
+      unnest_tokens(testString, text, String) %>%
+      mutate(word = replace(text, text %in% SmartStop_Words$word, " ")) %>%
+      summarise(text = paste(word, collapse=' '))
+  
+  testString <- testWord$text
+  testString<- trimws(testString, which = "both")
+}
+
+testVector <- strsplit(testString, " ")
+numberofWords <- length(testVector[[1]])
+
+lastWord <- data.frame(0)
+
+oneWord <- ""
+twoWord <- ""
+threeWord <- ""
+Four_Word <- ""
+
+if(numberofWords > 0){lastWord[1,1] <- as.character(testVector[[1]][length(testVector[[1]])-0])}
+if(numberofWords > 1){lastWord[2,1] <- as.character(testVector[[1]][length(testVector[[1]])-1])}
+if(numberofWords > 2){lastWord[3,1] <- as.character(testVector[[1]][length(testVector[[1]])-2])}
+if(numberofWords > 3){lastWord[4,1] <- as.character(testVector[[1]][length(testVector[[1]])-3])}
+
+names(lastWord) <- "Word"
+
+if(numberofWords > 3){fourWord <- paste(lastWord[4,], lastWord[3,], lastWord[2,], lastWord[1,], sep = " ")}
+if(numberofWords > 2){threeWord <- paste(lastWord[3,], lastWord[2,], lastWord[1,], sep = " ")}
+if(numberofWords > 1){twoWord <- paste(lastWord[2,], lastWord[1,], sep = " ")}
+if(numberofWords > 0){oneWord <- lastWord[1,]}
+
+Predict_Five_Words <- data.frame()
+Predict_Four_Words <- data.frame()
+Predict_Three_Words <- data.frame()
+Predict_Two_Words <- data.frame()
+
+if(numberofWords > 3){ Predict_Five_Words <- Five_Words[Five_Words$predictor == fourWord,]}
+if(numberofWords > 2 & nrow(Predict_Five_Words) < PredictionSize){Predict_Four_Words <- Four_Words[Four_Words$predictor == threeWord,]}
+if(numberofWords > 1 & nrow(Predict_Five_Words) + nrow(Predict_Four_Words) < PredictionSize){Predict_Three_Words <- Three_Words[Three_Words$predictor == twoWord,]}
+if(numberofWords > 0 & nrow(Predict_Five_Words) + nrow(Predict_Four_Words) + nrow(Predict_Three_Words) < PredictionSize){Predict_Two_Words <- Two_Words[Two_Words$predictor == oneWord,]}
+#Predict_zNon_Adjacent_Words <- Non_Adjacent_Words[Non_Adjacent_Words$predictor == lastImportantWord,]
+
+TextPrediction <- data.frame(matrix(ncol = 3, nrow = 0))
+colnames(TextPrediction) <- c("predictor", "predicted", "n")
+
+if(nrow(Predict_Five_Words) > 0 & PredictionSize > 0) {
+    TextPrediction <- Predict_Five_Words[1:min(PredictionSize,nrow(Predict_Five_Words)),]
+    PredictionSize <- PredictionSize - nrow(TextPrediction)
+    }
+if(nrow(Predict_Four_Words) > 0 & PredictionSize > 0) {
+    TextPrediction <- rbind(as.matrix(TextPrediction), 
+                            as.matrix(Predict_Four_Words[1:min(PredictionSize,nrow(Predict_Four_Words)),]))
+    PredictionSize <- PredictionSize - nrow(TextPrediction)
+    }
+if(nrow(Predict_Three_Words) > 0 & PredictionSize > 0) {
+    TextPrediction <- rbind(as.matrix(TextPrediction), 
+                            as.matrix(Predict_Three_Words[1:min(PredictionSize,nrow(Predict_Three_Words)),]))
+    PredictionSize <- PredictionSize - nrow(TextPrediction)
+}
+if(nrow(Predict_Two_Words) > 0 & PredictionSize > 0 ) {
+    TextPrediction <- rbind(as.matrix(TextPrediction), 
+                            as.matrix(Predict_Two_Words[1:min(PredictionSize,nrow(Predict_Two_Words)),]))
+    PredictionSize <- PredictionSize - nrow(TextPrediction)
+}
+# if(nrow(Predict_zNon_Adjacent_Words) > 0 & PredictionSize > 0) {
+#     TextPrediction <- rbind(TextPrediction, 
+#                             Predict_zNon_Adjacent_Words[1:min(PredictionSize,nrow(Predict_zNon_Adjacent_Words)),])
+#     PredictionSize <- PredictionSize - nrow(TextPrediction)
+# }
+
+
+
+if(PredictionSize > 0){
+    TextPrediction <- rbind(TextPrediction, 
+                            Single_Words[1:min(PredictionSize,nrow(Single_Words)),])
+}
+
+# TextPrediction <- TextPrediction[1:50,]
+# beepr::beep(4)
+
+table(TextPrediction)
+```
+
+
+
+
+## MILESTONE REPORT ## MILESTONE REPORT ## MILESTONE REPORT ## MILESTONE REPORT ## MILESTONE REPORT ## MILESTONE REPORT ## MILESTONE REPORT ##
+
+<!-- ## Visualizing Word Frequencies -->
+<!-- Lets compare the top ten most frequent unfiltered unigrams, bigrams and trigrams against their filtered equivalents.  These are displayed here. -->
+
+<!-- ```{r nGram Analysis} -->
+
+<!-- #### WHAT ARE THE MOST COMMON UNFILTERED WORDS? -->
+<!-- Gram1Frequency <- Gram1 %>% count(gram1, sort = TRUE) -->
+<!-- Gram2Frequency <- Gram2 %>% count(gram2, sort = TRUE) -->
+<!-- Gram3Frequency <- Gram3 %>% count(gram3, sort = TRUE) -->
+
+<!-- ## I want to be able to pick by rank -->
+<!-- Gram1Frequency$Rank <- seq.int(nrow(Gram1Frequency)) -->
+<!-- Gram2Frequency$Rank <- seq.int(nrow(Gram2Frequency)) -->
+<!-- Gram3Frequency$Rank <- seq.int(nrow(Gram3Frequency)) -->
+
+<!-- ## Unfiltered Plots -->
+<!-- Gram1FrequencyPlot <- Gram1Frequency %>% -->
+<!--   filter(Rank < 11) %>% -->
+<!--   mutate(gram1 = reorder(gram1, n)) %>% -->
+<!--   ggplot(aes(gram1, n, fill = Rank)) + -->
+<!--   geom_col() +  -->
+<!--   coord_flip() +  -->
+<!--   xlab(NULL) + -->
+<!--   ylab(NULL) + -->
+<!--   theme(legend.position = "none") +  -->
+<!--   ggtitle("Unfiltered") -->
+<!-- Gram2FrequencyPlot <- Gram2Frequency %>% -->
+<!--   filter(Rank < 11) %>% -->
+<!--   mutate(gram2 = reorder(gram2, n)) %>% -->
+<!--   ggplot(aes(gram2, n, fill = Rank)) + -->
+<!--   geom_col() +  -->
+<!--   coord_flip() + -->
+<!--   xlab(NULL) + -->
+<!--   ylab(NULL) + -->
+<!--   theme(legend.position = "none") -->
+<!-- Gram3FrequencyPlot <- Gram3Frequency %>% -->
+<!--   filter(Rank < 11) %>% -->
+<!--   mutate(gram3 = reorder(gram3, n)) %>% -->
+<!--   ggplot(aes(gram3, n, fill = Rank)) + -->
+<!--   geom_col() +  -->
+<!--   coord_flip() + -->
+<!--   xlab(NULL) + -->
+<!--   ylab(NULL) + -->
+<!--   theme(legend.position = "none") -->
+
+<!-- ## Filtered Plots -->
+<!-- filtered1GramFrequencyPlot <- filtered1Gram %>% -->
+<!--   filter(Rank < 11) %>% -->
+<!--   mutate(gram1 = reorder(gram1, n)) %>% -->
+<!--   ggplot(aes(gram1, n, fill = Rank)) + -->
+<!--   geom_col() +  -->
+<!--   coord_flip() +  -->
+<!--   xlab(NULL) + -->
+<!--   ylab(NULL) + -->
+<!--   theme(legend.position = "none") +  -->
+<!--   labs(title = "Filtered") -->
+<!-- filtered2GramFrequencyPlot <- filtered2Gram %>% -->
+<!--   filter(Rank < 11) %>% -->
+<!--   mutate(gram2 = reorder(gram2, n)) %>% -->
+<!--   ggplot(aes(gram2, n, fill = Rank)) + -->
+<!--   geom_col() +  -->
+<!--   coord_flip() + -->
+<!--   xlab(NULL) + -->
+<!--   ylab(NULL) + -->
+<!--   theme(legend.position = "none") -->
+<!-- filtered3GramFrequencyPlot <- filtered3Gram %>% -->
+<!--   filter(Rank < 11) %>% -->
+<!--   mutate(gram3 = reorder(gram3, n)) %>% -->
+<!--   ggplot(aes(gram3, n, fill = Rank)) + -->
+<!--   geom_col() +  -->
+<!--   coord_flip() + -->
+<!--   xlab(NULL) + -->
+<!--   ylab(NULL) + -->
+<!--   theme(legend.position = "none") -->
+
+<!-- grid.arrange(Gram1FrequencyPlot, filtered1GramFrequencyPlot, Gram2FrequencyPlot, filtered2GramFrequencyPlot, Gram3FrequencyPlot, filtered3GramFrequencyPlot, nrow = 3) -->
+
+<!-- rm(Gram1FrequencyPlot, filtered1GramFrequencyPlot, Gram2FrequencyPlot, filtered2GramFrequencyPlot, Gram3FrequencyPlot, filtered3GramFrequencyPlot) -->
+<!-- ``` -->
+
+<!-- It is pretty clear that the filter adds a lot of meaning.  Unless one wants to always predict "the, to, I, a, and, of..." It is interesting that the most common trigram is `r filtered3Gram[1,]`.  What are the relative frequencies of the entire dataset? -->
+
+<!-- ```{r EntireDataset Frequencies} -->
+
+<!-- fdGram1FrequencyPlot <- Gram1Frequency %>% -->
+<!--   filter(Rank < 1001) %>% -->
+<!--   mutate(gram1 = reorder(gram1, -n)) %>% -->
+<!--   ggplot(aes(gram1, n, fill = Rank)) + -->
+<!--   geom_col() +  -->
+<!--   xlab(NULL) + -->
+<!--   ylab(NULL) + -->
+<!--   theme(legend.position = "none", axis.text.x = element_blank(), axis.text.y = element_blank(), axis.ticks = element_blank()) +  -->
+<!--   ggtitle("Unfiltered Frequency of Unigrams - Distribution") -->
+
+<!-- fdfiltered1GramFrequencyPlot <- filtered1Gram %>% -->
+<!--   filter(Rank < 1001) %>% -->
+<!--   mutate(gram1 = reorder(gram1, -n)) %>% -->
+<!--   ggplot(aes(gram1, n, fill = Rank)) + -->
+<!--   geom_col() +  -->
+<!--   xlab(NULL) + -->
+<!--   ylab(NULL) + -->
+<!--   theme(legend.position = "none", axis.text.x = element_blank(), axis.text.y = element_blank(), axis.ticks = element_blank()) +  -->
+<!--   labs(title = "Filtered Frequency of Unigrams - Distribution") -->
+
+
+<!-- grid.arrange(fdGram1FrequencyPlot, fdfiltered1GramFrequencyPlot) -->
+
+<!-- rm(fdGram1FrequencyPlot, fdfiltered1GramFrequencyPlot) -->
+<!-- ``` -->
+
+<!-- ##Summary -->
+<!-- We can see that there are a few very common words, either filtered or not, and then a long tail of words that are used occasionally or rarely.  We have taken three distinct bodies of text (from Blogs, News and Twitter), broken out each word, and combination of two or three words, cleaned that data of non-word characters and evaluated their frequencies.  Left at this stage, we are left with a list of "stop words" like the, and, it, but, if.  These are the most common words to predict, but they are generally unimportant ones.  If a user starts typing "Happy Mothers..." a quality prediction algorithm is not going to predict "The"...  Hallmark probably needs to get a trademark for "Happy Mothers The."  Furthermore, "Just in the nick of AND" is probably not the most likely desired response. -->
+
+<!-- ## Next Steps -->
+<!-- * Now that we have a full picture of the n=3 Gram analysis, the next steps are to progress to prediction. -->
+<!-- * Improve and optimize the code, it takes an awfully long time to process everything just to get to trigram stage. -->
+<!-- * Experiment with larger nGrams and see if this produces more valuable insights. -->
+<!-- * Test some combinations of filtered and unfiltered.  Currently the filters are a little bit overzealous - they remove all words from the analysis.  I think I'm going to test with filters that only remove pure stop words, but leave those that contain at least one meaningful word. -->
+<!-- * Eventually I'm sure I'll need to calculate probability.  If a user types Happy Mothers... the program is going to need to say, "99% probability the next word is "Day"". -->
+
+<!-- ``` -->
+
+<!-- ```{r Quiz #1 - Calculating Strings, eval=FALSE, include=FALSE} -->
+<!-- ## QUESTION 1 : How big is the blogs text file? -->
+<!-- file.info(dataEnglishBlogs)$size/1024/1024   ## Default reports in bytes, convert to kb (/1024), convert to mb (/1024) -->
+<!-- ## 200.424 MB -->
+
+<!-- ## QUESTION 2 : How many lines of twitter text? -->
+<!-- length(Twitter)   ##2360148 -->
+
+<!-- ## Easy way to calculate longest string length -->
+<!-- # max(nchar(Twitter)) -->
+<!-- # max(nchar(Blogs)) -->
+<!-- # max(nchar(News)) -->
+
+<!-- ## QUESTION 3 : What is the length of the longest line seen in the three data sets? -->
+<!-- ## Faster and better way to calculate string length -->
+<!-- max(stri_length(Twitter))   ## 213 (They are tweets afterall) -->
+<!-- max(stri_length(Blogs))     ## 40835 <<< -->
+<!-- max(stri_length(News))      ## 5760 -->
+
+<!-- ## QUESTION 4 : What is the ratio of tweets that contain love vs hate? -->
+<!-- ## Amor vincit odium -->
+<!-- Love <- table(grepl("love", Twitter))   ## Creates a table identifying for each string whether they contain "love" -->
+<!-- Hate <- table(grepl("hate", Twitter))   ## Creates a table identifying for each string whether they contain "hate" -->
+<!-- LoveHate <- Love[2] / Hate[2]           ## Calculates the True Loves/True Hates -->
+<!-- LoveHate                                ## 4.108592 -->
+
+<!-- ## QUESTION 5 : There is one tweet about biostats, what is the subject talking about? -->
+<!-- ## Biostats -->
+<!-- grep("biostats", Twitter, value = T)    ## Searches for "biostats" if value is found, returns that string -->
+<!-- ## "i know how you feel.. i have biostats on tuesday and i have yet to study =/" -->
+
+<!-- ## QUESTION 6 : A very particular tweet is repeated how many times? -->
+<!-- ## Computer Kickboxing -->
+<!-- grep("A computer once beat me at chess, but it was no match for me at kickboxing", Twitter, value = T) -->
+<!-- ## Result shows up three times - no other text at all, too bad, context might have been amusing. -->
